@@ -204,9 +204,6 @@ def get_extension(language):
     if "c#" in language:
         return ".cs"
 
-    if "php" in language:
-        return ".php"
-
     if language == "c":
         return ".c"
 
@@ -263,6 +260,26 @@ def main():
 
     for submission in accepted:
 
+        submission_id = submission.get("id")
+
+        # ==============================
+        # Check whether API gave source
+        # ==============================
+
+        source_code = submission.get(
+            "sourceCode"
+        )
+
+        print(
+            f"Submission {submission_id}: "
+            f"API source available = "
+            f"{bool(source_code)}"
+        )
+
+        # ==============================
+        # Problem information
+        # ==============================
+
         problem = submission["problem"]
 
         contest_id = problem.get(
@@ -300,30 +317,45 @@ def main():
 
         file_path = OUTPUT_DIR / filename
 
+        # ==============================
+        # Don't duplicate existing files
+        # ==============================
+
         if file_path.exists():
+
             print(
                 f"Already exists: {file_path}"
             )
+
             continue
 
-        # Try API source first
-        source_code = submission.get(
-            "sourceCode"
-        )
+        # ==============================
+        # If API has no source,
+        # try submission page
+        # ==============================
 
-        # If API didn't provide source,
-        # fetch it from the submission page.
         if not source_code:
+
             source_code = get_source_code(
                 submission
             )
 
+        # ==============================
+        # If source still unavailable
+        # ==============================
+
         if not source_code:
+
             print(
                 f"Could not get source for "
-                f"submission {submission.get('id')}"
+                f"submission {submission_id}"
             )
+
             continue
+
+        # ==============================
+        # Save solution
+        # ==============================
 
         file_path.write_text(
             source_code,
@@ -336,7 +368,7 @@ def main():
 
         added += 1
 
-        # Avoid sending requests too quickly.
+        # Avoid sending requests too quickly
         time.sleep(2)
 
     print(
