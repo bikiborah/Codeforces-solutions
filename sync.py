@@ -1,4 +1,5 @@
 import os
+import base64
 import hashlib
 import time
 import random
@@ -6,12 +7,7 @@ import string
 from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
 
-
-# ==============================
-# Configuration
-# ==============================
 
 HANDLE = os.environ["CF_HANDLE"]
 API_KEY = os.environ["CF_API_KEY"]
@@ -20,12 +16,6 @@ API_SECRET = os.environ["CF_API_SECRET"]
 OUTPUT_DIR = Path("solutions")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-BASE_URL = "https://codeforces.com"
-
-
-# ==============================
-# Codeforces API signature
-# ==============================
 
 def create_signature(method, params):
     rand = "".join(
@@ -35,9 +25,11 @@ def create_signature(method, params):
         )
     )
 
+    sorted_params = sorted(params.items())
+
     query = "&".join(
         f"{key}={value}"
-        for key, value in sorted(params.items())
+        for key, value in sorted_params
     )
 
     signature_string = (
@@ -51,10 +43,6 @@ def create_signature(method, params):
     return rand + hashed
 
 
-# ==============================
-# Get submissions
-# ==============================
-
 def get_submissions():
 
     method = "user.status"
@@ -62,19 +50,23 @@ def get_submissions():
     params = {
         "apiKey": API_KEY,
         "handle": HANDLE,
+        "from": "1",
+        "count": "1000",
         "includeSources": "true",
-        "time": int(time.time()),
-        "from": 1,
-        "count": 1000,
+        "time": str(int(time.time())),
     }
 
     params["apiSig"] = create_signature(
         method,
-        params
+        {
+            key: value
+            for key, value in params.items()
+            if key != "apiSig"
+        }
     )
 
     response = requests.get(
-        f"{BASE_URL}/api/user.status",
+        "https://codeforces.com/api/user.status",
         params=params,
         timeout=30
     )
@@ -85,93 +77,12 @@ def get_submissions():
 
     if data.get("status") != "OK":
         raise RuntimeError(
-            f"Codeforces API error: {data}"
+            f"Codeforces API error: "
+            f"{data.get('comment', data)}"
         )
 
     return data["result"]
 
-
-# ==============================
-# Get source code from submission
-# page
-# ==============================
-
-def get_source_code(submission):
-
-    contest_id = submission.get("contestId")
-    submission_id = submission.get("id")
-
-    if not contest_id or not submission_id:
-        print(
-            f"Skipping submission {submission_id}: "
-            "missing contest ID"
-        )
-        return None
-
-    url = (
-        f"{BASE_URL}/contest/"
-        f"{contest_id}/submission/"
-        f"{submission_id}"
-    )
-
-    print(f"Fetching source: {url}")
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/131.0 Safari/537.36"
-        )
-    }
-
-    try:
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=30
-        )
-
-        response.raise_for_status()
-
-    except requests.RequestException as e:
-        print(
-            f"Could not fetch submission "
-            f"{submission_id}: {e}"
-        )
-        return None
-
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser"
-    )
-
-    source_element = soup.select_one(
-        "pre#program-source-text"
-    )
-
-    if source_element is None:
-        print(
-            f"Source code not found for "
-            f"submission {submission_id}"
-        )
-        return None
-
-    source_code = source_element.get_text()
-
-    if not source_code.strip():
-        print(
-            f"Source code is empty for "
-            f"submission {submission_id}"
-        )
-        return None
-
-    return source_code
-
-
-# ==============================
-# File extension
-# ==============================
 
 def get_extension(language):
 
@@ -210,10 +121,6 @@ def get_extension(language):
     return ".txt"
 
 
-# ==============================
-# Safe filename
-# ==============================
-
 def clean_name(text):
 
     allowed = (
@@ -227,10 +134,6 @@ def clean_name(text):
         for c in text
     )
 
-
-# ==============================
-# Main
-# ==============================
 
 def main():
 
@@ -262,29 +165,14 @@ def main():
 
         submission_id = submission.get("id")
 
-        # ==============================
-        # Check whether API gave source
-        # ==============================
-
-        source_code = submission.get(
-            "sourceCode"
+        problem = submission.get(
+            "problem",
+            {}
         )
-
-        print(
-            f"Submission {submission_id}: "
-            f"API source available = "
-            f"{bool(source_code)}"
-        )
-
-        # ==============================
-        # Problem information
-        # ==============================
-
-        problem = submission["problem"]
 
         contest_id = problem.get(
             "contestId",
-            "unknown"
+            submission.get("contestId", "unknown")
         )
 
         problem_index = problem.get(
@@ -304,9 +192,7 @@ def main():
             "unknown"
         )
 
-        extension = get_extension(
-            language
-        )
+        extension = get_extension(language)
 
         filename = (
             f"{contest_id}_"
@@ -317,45 +203,48 @@ def main():
 
         file_path = OUTPUT_DIR / filename
 
-        # ==============================
-        # Don't duplicate existing files
-        # ==============================
-
         if file_path.exists():
-
             print(
                 f"Already exists: {file_path}"
             )
-
             continue
 
-        # ==============================
-        # If API has no source,
-        # try submission page
-        # ==============================
+        # Codeforces provides source code
+        # as Base64 when includeSources=true.
+        source_base64 = submission.get(
+            "sourceBase64"
+        )
 
-        if not source_code:
+        print(
+            f"Submission {submission_id}: "
+            f"sourceBase64 available = "
+            f"{bool(source_base64)}"
+        )
 
-            source_code = get_source_code(
-                submission
-            )
-
-        # ==============================
-        # If source still unavailable
-        # ==============================
-
-        if not source_code:
-
+        if not source_base64:
             print(
-                f"Could not get source for "
+                f"No source code returned for "
                 f"submission {submission_id}"
             )
-
             continue
 
-        # ==============================
-        # Save solution
-        # ==============================
+        try:
+
+            source_code = base64.b64decode(
+                source_base64
+            ).decode(
+                "utf-8",
+                errors="replace"
+            )
+
+        except Exception as e:
+
+            print(
+                f"Could not decode source for "
+                f"submission {submission_id}: {e}"
+            )
+
+            continue
 
         file_path.write_text(
             source_code,
@@ -367,9 +256,6 @@ def main():
         )
 
         added += 1
-
-        # Avoid sending requests too quickly
-        time.sleep(2)
 
     print(
         f"Finished. Added "
