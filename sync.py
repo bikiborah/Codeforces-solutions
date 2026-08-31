@@ -6,6 +6,7 @@ import string
 from pathlib import Path
 
 import requests
+from bs4 import BeautifulSoup
 
 
 # ==============================
@@ -18,6 +19,8 @@ API_SECRET = os.environ["CF_API_SECRET"]
 
 OUTPUT_DIR = Path("solutions")
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+BASE_URL = "https://codeforces.com"
 
 
 # ==============================
@@ -71,7 +74,7 @@ def get_submissions():
     )
 
     response = requests.get(
-        "https://codeforces.com/api/user.status",
+        f"{BASE_URL}/api/user.status",
         params=params,
         timeout=30
     )
@@ -86,6 +89,84 @@ def get_submissions():
         )
 
     return data["result"]
+
+
+# ==============================
+# Get source code from submission
+# page
+# ==============================
+
+def get_source_code(submission):
+
+    contest_id = submission.get("contestId")
+    submission_id = submission.get("id")
+
+    if not contest_id or not submission_id:
+        print(
+            f"Skipping submission {submission_id}: "
+            "missing contest ID"
+        )
+        return None
+
+    url = (
+        f"{BASE_URL}/contest/"
+        f"{contest_id}/submission/"
+        f"{submission_id}"
+    )
+
+    print(f"Fetching source: {url}")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/131.0 Safari/537.36"
+        )
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+    except requests.RequestException as e:
+        print(
+            f"Could not fetch submission "
+            f"{submission_id}: {e}"
+        )
+        return None
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+    source_element = soup.select_one(
+        "pre#program-source-text"
+    )
+
+    if source_element is None:
+        print(
+            f"Source code not found for "
+            f"submission {submission_id}"
+        )
+        return None
+
+    source_code = source_element.get_text()
+
+    if not source_code.strip():
+        print(
+            f"Source code is empty for "
+            f"submission {submission_id}"
+        )
+        return None
+
+    return source_code
 
 
 # ==============================
@@ -126,6 +207,9 @@ def get_extension(language):
     if "php" in language:
         return ".php"
 
+    if language == "c":
+        return ".c"
+
     return ".txt"
 
 
@@ -153,32 +237,31 @@ def clean_name(text):
 
 def main():
 
-    print(f"Checking Codeforces submissions for {HANDLE}...")
+    print(
+        f"Checking Codeforces submissions "
+        f"for {HANDLE}..."
+    )
 
     submissions = get_submissions()
 
-    print(f"Total submissions found: {len(submissions)}")
+    print(
+        f"Total submissions found: "
+        f"{len(submissions)}"
+    )
 
     accepted = [
         s for s in submissions
         if s.get("verdict") == "OK"
     ]
 
-    print(f"Accepted submissions found: {len(accepted)}")
-
-    with_source = [
-        s for s in accepted
-        if s.get("sourceCode")
-    ]
-
     print(
-        f"Accepted submissions with source code: "
-        f"{len(with_source)}"
+        f"Accepted submissions found: "
+        f"{len(accepted)}"
     )
 
     added = 0
 
-    for submission in with_source:
+    for submission in accepted:
 
         problem = submission["problem"]
 
@@ -204,7 +287,9 @@ def main():
             "unknown"
         )
 
-        extension = get_extension(language)
+        extension = get_extension(
+            language
+        )
 
         filename = (
             f"{contest_id}_"
@@ -216,18 +301,48 @@ def main():
         file_path = OUTPUT_DIR / filename
 
         if file_path.exists():
+            print(
+                f"Already exists: {file_path}"
+            )
+            continue
+
+        # Try API source first
+        source_code = submission.get(
+            "sourceCode"
+        )
+
+        # If API didn't provide source,
+        # fetch it from the submission page.
+        if not source_code:
+            source_code = get_source_code(
+                submission
+            )
+
+        if not source_code:
+            print(
+                f"Could not get source for "
+                f"submission {submission.get('id')}"
+            )
             continue
 
         file_path.write_text(
-            submission["sourceCode"],
+            source_code,
             encoding="utf-8"
         )
 
-        print(f"Added: {file_path}")
+        print(
+            f"Added: {file_path}"
+        )
 
         added += 1
 
-    print(f"Finished. Added {added} new solution(s).")
+        # Avoid sending requests too quickly.
+        time.sleep(2)
+
+    print(
+        f"Finished. Added "
+        f"{added} new solution(s)."
+    )
 
 
 if __name__ == "__main__":
