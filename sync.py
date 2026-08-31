@@ -8,9 +8,9 @@ from pathlib import Path
 import requests
 
 
-# -----------------------------
+# ==============================
 # Configuration
-# -----------------------------
+# ==============================
 
 HANDLE = os.environ["CF_HANDLE"]
 API_KEY = os.environ["CF_API_KEY"]
@@ -20,15 +20,11 @@ OUTPUT_DIR = Path("solutions")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
-# -----------------------------
-# Codeforces API
-# -----------------------------
+# ==============================
+# Codeforces API signature
+# ==============================
 
-def get_api_signature(method, params):
-    """
-    Creates the signature required by the Codeforces API.
-    """
-
+def create_signature(method, params):
     rand = "".join(
         random.choices(
             string.ascii_lowercase + string.digits,
@@ -36,28 +32,27 @@ def get_api_signature(method, params):
         )
     )
 
-    sorted_params = sorted(params.items())
-
     query = "&".join(
         f"{key}={value}"
-        for key, value in sorted_params
+        for key, value in sorted(params.items())
     )
 
-    signature_base = (
+    signature_string = (
         f"{rand}/{method}?{query}#{API_SECRET}"
     )
 
-    signature = hashlib.sha512(
-        signature_base.encode("utf-8")
+    hashed = hashlib.sha512(
+        signature_string.encode("utf-8")
     ).hexdigest()
 
-    return rand + signature
+    return rand + hashed
 
+
+# ==============================
+# Get submissions
+# ==============================
 
 def get_submissions():
-    """
-    Gets the user's recent Codeforces submissions.
-    """
 
     method = "user.status"
 
@@ -66,10 +61,11 @@ def get_submissions():
         "handle": HANDLE,
         "includeSources": "true",
         "time": int(time.time()),
+        "from": 1,
         "count": 1000,
     }
 
-    params["apiSig"] = get_api_signature(
+    params["apiSig"] = create_signature(
         method,
         params
     )
@@ -92,11 +88,12 @@ def get_submissions():
     return data["result"]
 
 
-# -----------------------------
-# File helpers
-# -----------------------------
+# ==============================
+# File extension
+# ==============================
 
 def get_extension(language):
+
     language = language.lower()
 
     if "c++" in language:
@@ -132,10 +129,11 @@ def get_extension(language):
     return ".txt"
 
 
+# ==============================
+# Safe filename
+# ==============================
+
 def clean_name(text):
-    """
-    Makes a safe filename.
-    """
 
     allowed = (
         string.ascii_letters
@@ -144,101 +142,92 @@ def clean_name(text):
     )
 
     return "".join(
-        character if character in allowed else "_"
-        for character in text
+        c if c in allowed else "_"
+        for c in text
     )
 
 
-# -----------------------------
-# Save solutions
-# -----------------------------
-
-def save_submission(submission):
-    """
-    Saves an accepted submission if it
-    hasn't already been saved.
-    """
-
-    if submission.get("verdict") != "OK":
-        return False
-
-    source = submission.get("sourceCode")
-
-    if not source:
-        return False
-
-    problem = submission["problem"]
-
-    contest_id = problem.get(
-        "contestId",
-        "unknown"
-    )
-
-    problem_index = problem.get(
-        "index",
-        "unknown"
-    )
-
-    problem_name = clean_name(
-        problem.get(
-            "name",
-            "solution"
-        )
-    )
-
-    language = submission.get(
-        "programmingLanguage",
-        "unknown"
-    )
-
-    extension = get_extension(language)
-
-    filename = (
-        f"{contest_id}_"
-        f"{problem_index}_"
-        f"{problem_name}"
-        f"{extension}"
-    )
-
-    file_path = OUTPUT_DIR / filename
-
-    # Don't replace an existing solution.
-    if file_path.exists():
-        return False
-
-    file_path.write_text(
-        source,
-        encoding="utf-8"
-    )
-
-    print(f"Added: {file_path}")
-
-    return True
-
-
-# -----------------------------
-# Main program
-# -----------------------------
+# ==============================
+# Main
+# ==============================
 
 def main():
 
-    print(
-        f"Checking Codeforces submissions "
-        f"for {HANDLE}..."
-    )
+    print(f"Checking Codeforces submissions for {HANDLE}...")
 
     submissions = get_submissions()
 
-    added = 0
+    print(f"Total submissions found: {len(submissions)}")
 
-    for submission in submissions:
+    accepted = [
+        s for s in submissions
+        if s.get("verdict") == "OK"
+    ]
 
-        if save_submission(submission):
-            added += 1
+    print(f"Accepted submissions found: {len(accepted)}")
+
+    with_source = [
+        s for s in accepted
+        if s.get("sourceCode")
+    ]
 
     print(
-        f"Finished. Added {added} new solution(s)."
+        f"Accepted submissions with source code: "
+        f"{len(with_source)}"
     )
+
+    added = 0
+
+    for submission in with_source:
+
+        problem = submission["problem"]
+
+        contest_id = problem.get(
+            "contestId",
+            "unknown"
+        )
+
+        problem_index = problem.get(
+            "index",
+            "unknown"
+        )
+
+        problem_name = clean_name(
+            problem.get(
+                "name",
+                "solution"
+            )
+        )
+
+        language = submission.get(
+            "programmingLanguage",
+            "unknown"
+        )
+
+        extension = get_extension(language)
+
+        filename = (
+            f"{contest_id}_"
+            f"{problem_index}_"
+            f"{problem_name}"
+            f"{extension}"
+        )
+
+        file_path = OUTPUT_DIR / filename
+
+        if file_path.exists():
+            continue
+
+        file_path.write_text(
+            submission["sourceCode"],
+            encoding="utf-8"
+        )
+
+        print(f"Added: {file_path}")
+
+        added += 1
+
+    print(f"Finished. Added {added} new solution(s).")
 
 
 if __name__ == "__main__":
